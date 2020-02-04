@@ -190,16 +190,14 @@ class ESP_SPIcontrol:  # pylint: disable=too-many-public-methods, too-many-insta
         if self._debug >= 3:
             print("Wait for ESP32 ready", end='')
         times = time.monotonic()
-        while (time.monotonic() - times) < 10:  # wait up to 10 seconds
+        while True: # (time.monotonic() - times) < 10:  # wait up to 10 seconds
             if not self._ready.value: # we're ready!
                 break
             if self._debug >= 3:
                 print('.', end='')
                 time.sleep(0.05)
-        else:
-            raise RuntimeError("ESP32 not responding")
-        if self._debug >= 3:
-            print()
+        if self._debug >= 1 and time.monotonic() - times > 0.1:
+            print("wait for ready", time.monotonic() - times, "seconds")
 
     # pylint: disable=too-many-branches
     def _send_command(self, cmd, params=None, *, param_len_16=False):
@@ -263,7 +261,7 @@ class ESP_SPIcontrol:  # pylint: disable=too-many-public-methods, too-many-insta
         if not end:
             end = len(buffer)
         spi.readinto(buffer, start=start, end=end)
-        if self._debug >= 3:
+        if self._debug >= 3 and len(buffer) < 100:
             print("\t\tRead:", [hex(i) for i in buffer])
 
     def _wait_spi_char(self, spi, desired):
@@ -272,6 +270,7 @@ class ESP_SPIcontrol:  # pylint: disable=too-many-public-methods, too-many-insta
         while (time.monotonic() - times) < 0.1:
             r = self._read_byte(spi)
             if r == _ERR_CMD:
+                print("command error: 0x{:x} 0x{:x}".format(self._read_byte(spi), self._read_byte(spi)))
                 raise RuntimeError("Error response to command")
             if r == desired:
                 return True
@@ -323,6 +322,8 @@ class ESP_SPIcontrol:  # pylint: disable=too-many-public-methods, too-many-insta
                                    recv_param_len_16=False):
         """Send a high level SPI command, wait and return the response"""
         self._send_command(cmd, params, param_len_16=sent_param_len_16)
+        if self._debug and cmd != 0x2b:
+            print("sent command 0x{:x}".format(cmd), reply_params)
         return self._wait_response_cmd(cmd, reply_params, param_len_16=recv_param_len_16)
 
     @property
@@ -344,7 +345,7 @@ class ESP_SPIcontrol:  # pylint: disable=too-many-public-methods, too-many-insta
         if self._debug:
             print("Firmware version")
         resp = self._send_command_get_response(_GET_FW_VERSION_CMD)
-        return resp[0]
+        return str(resp[0], "utf-8")
 
     @property
     def MAC_address(self):        # pylint: disable=invalid-name
@@ -634,6 +635,8 @@ class ESP_SPIcontrol:  # pylint: disable=too-many-public-methods, too-many-insta
                                                    (dest, port_param,
                                                     self._socknum_ll[0],
                                                     (conn_mode,)))
+        if self._debug:
+            print("*** Open socket response", resp)
         if resp[0][0] != 1:
             raise RuntimeError("Could not connect to remote server")
 
@@ -675,12 +678,12 @@ class ESP_SPIcontrol:  # pylint: disable=too-many-public-methods, too-many-insta
         self._socknum_ll[0][0] = socket_num
         resp = self._send_command_get_response(_AVAIL_DATA_TCP_CMD, self._socknum_ll)
         reply = struct.unpack('<H', resp[0])[0]
-        if self._debug:
+        if self._debug and reply > 0:
             print("ESPSocket: %d bytes available" % reply)
         return reply
 
     def socket_read(self, socket_num, size):
-        """Read up to 'size' bytes from the socket number. Returns a bytearray"""
+        """Read up to 'size' bytes from the socket number. Returns a bytes object"""
         if self._debug:
             print("Reading %d bytes from ESP socket with status %d" %
                   (size, self.socket_status(socket_num)))
@@ -702,8 +705,9 @@ class ESP_SPIcontrol:  # pylint: disable=too-many-public-methods, too-many-insta
 
         self.socket_open(socket_num, dest, port, conn_mode=conn_mode)
         times = time.monotonic()
-        while (time.monotonic() - times) < 3:  # wait 3 seconds
+        while True:
             if self.socket_connected(socket_num):
+                print(time.monotonic() - times)
                 return True
             time.sleep(0.01)
         raise RuntimeError("Failed to establish connection")
@@ -711,7 +715,7 @@ class ESP_SPIcontrol:  # pylint: disable=too-many-public-methods, too-many-insta
     def socket_close(self, socket_num):
         """Close a socket using the ESP32's internal reference number"""
         if self._debug:
-            print("*** Closing socket #%d" % socket_num)
+            print("%f *** Closing socket #%d" % (time.monotonic(), socket_num))
         self._socknum_ll[0][0] = socket_num
         resp = self._send_command_get_response(_STOP_CLIENT_TCP_CMD, self._socknum_ll)
         if resp[0][0] != 1:

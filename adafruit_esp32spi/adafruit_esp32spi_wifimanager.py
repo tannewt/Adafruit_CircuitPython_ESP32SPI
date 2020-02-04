@@ -64,7 +64,8 @@ class ESPSPI_WiFiManager:
         self.password = secrets.get('password', None)
         self.attempts = attempts
         self._connection_type = connection_type
-        requests.set_socket(socket, esp)
+        socket.set_interface(esp)
+        requests.set_socket(socket)
         self.statuspix = status_pixel
         self.pixel_status(0)
 
