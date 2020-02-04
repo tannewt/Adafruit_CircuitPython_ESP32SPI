@@ -18,13 +18,15 @@ import gc
 from micropython import const
 from adafruit_esp32spi import adafruit_esp32spi
 
-_the_interface = None  # pylint: disable=invalid-name
-
-
+_socket_provider = None   # pylint: disable=invalid-name
 def set_interface(iface):
     """Helper to set the global internet interface"""
-    global _the_interface  # pylint: disable=global-statement, invalid-name
-    _the_interface = iface
+    global _socket_provider   # pylint: disable=global-statement, invalid-name
+    global TLS_MODE
+    global TCP_MODE
+    TLS_MODE = iface.TLS_MODE
+    TCP_MODE = iface.TCP_MODE
+    _socket_provider = iface
 
 
 SOCK_STREAM = const(1)
@@ -39,10 +41,8 @@ def getaddrinfo(host, port, family=0, socktype=0, proto=0, flags=0):
     compatible list of tuples. Honestly, we ignore anything but host & port"""
     if not isinstance(port, int):
         raise RuntimeError("Port must be an integer")
-    ipaddr = _the_interface.get_host_by_name(host)
+    ipaddr = _socket_provider.get_host_by_name(host)
     return [(AF_INET, socktype, proto, "", (ipaddr, port))]
-
-
 # pylint: enable=too-many-arguments, unused-argument
 
 # pylint: disable=unused-argument, redefined-builtin, invalid-name
@@ -59,7 +59,7 @@ class socket:
         if type != SOCK_STREAM:
             raise RuntimeError("Only SOCK_STREAM type supported")
         self._buffer = b""
-        self._socknum = socknum if socknum else _the_interface.get_socket()
+        self._socknum = socknum if socknum else _socket_provider.get_socket()
         self.settimeout(0)
 
     # pylint: enable=too-many-arguments
@@ -70,8 +70,8 @@ class socket:
         depending on the underlying interface"""
         host, port = address
         if conntype is None:
-            conntype = _the_interface.TCP_MODE
-        if not _the_interface.socket_connect(
+            conntype = _socket_provider.TCP_MODE
+        if not _socket_provider.socket_connect(
             self._socknum, host, port, conn_mode=conntype
         ):
             raise RuntimeError("Failed to connect to host", host)
@@ -79,7 +79,7 @@ class socket:
 
     def send(self, data):  # pylint: disable=no-self-use
         """Send some data to the socket"""
-        _the_interface.socket_write(self._socknum, data)
+        _socket_provider.socket_write(self._socknum, data)
         gc.collect()
 
     def write(self, data):
@@ -96,11 +96,17 @@ class socket:
             # there's no line already in there, read some more
             avail = self.available()
             if avail:
-                self._buffer += _the_interface.socket_read(self._socknum, avail)
-            elif self._timeout > 0 and time.monotonic() - stamp > self._timeout:
-                self.close()  # Make sure to close socket so that we don't exhaust sockets.
-                raise RuntimeError("Didn't receive full response, failing out")
-        firstline, self._buffer = self._buffer.split(b"\r\n", 1)
+                # TODO: Remove this because it causes a longer byte string allocation.
+                self._buffer += _socket_provider.socket_read(self._socknum, avail)
+            # elif self._timeout > 0 and time.monotonic() - stamp > self._timeout:
+            #     print("timed out", self._timeout, self._buffer)
+            #     self.close()  # Make sure to close socket so that we don't exhaust sockets.
+            #     raise RuntimeError("Didn't receive full response, failing out")
+
+        duration = time.monotonic() - stamp
+        if duration > 0.1:
+            print("readline finished", duration)
+        firstline, self._buffer = self._buffer.split(b'\r\n', 1)
         gc.collect()
         return firstline
 
@@ -113,7 +119,8 @@ class socket:
             while True:
                 avail = self.available()
                 if avail:
-                    self._buffer += _the_interface.socket_read(self._socknum, avail)
+                    # TODO: Remove this because it causes a longer byte string allocation.
+                    self._buffer += _socket_provider.socket_read(self._socknum, avail)
                 else:
                     break
             gc.collect()
@@ -130,7 +137,7 @@ class socket:
             avail = self.available()
             if avail:
                 stamp = time.monotonic()
-                recv = _the_interface.socket_read(self._socknum, min(to_read, avail))
+                recv = _socket_provider.socket_read(self._socknum, min(to_read, avail))
                 received.append(recv)
                 to_read -= len(recv)
                 gc.collect()
@@ -163,7 +170,7 @@ class socket:
     def available(self):
         """Returns how many bytes of data are available to be read (up to the MAX_PACKET length)"""
         if self.socknum != NO_SOCKET_AVAIL:
-            return min(_the_interface.socket_available(self._socknum), MAX_PACKET)
+            return min(_socket_provider.socket_available(self._socknum), MAX_PACKET)
         return 0
 
     def connected(self):
@@ -172,7 +179,7 @@ class socket:
             return False
         if self.available():
             return True
-        status = _the_interface.socket_status(self.socknum)
+        status = _socket_provider.socket_status(self.socknum)
         result = status not in (
             adafruit_esp32spi.SOCKET_LISTEN,
             adafruit_esp32spi.SOCKET_CLOSED,
@@ -181,7 +188,7 @@ class socket:
             adafruit_esp32spi.SOCKET_TIME_WAIT,
             adafruit_esp32spi.SOCKET_SYN_SENT,
             adafruit_esp32spi.SOCKET_SYN_RCVD,
-            adafruit_esp32spi.SOCKET_CLOSE_WAIT,
+            adafruit_esp32spi.SOCKET_CLOSE_WAIT
         )
         if not result:
             self.close()
@@ -195,7 +202,5 @@ class socket:
 
     def close(self):
         """Close the socket, after reading whatever remains"""
-        _the_interface.socket_close(self._socknum)
-
-
+        _socket_provider.socket_close(self._socknum)
 # pylint: enable=unused-argument, redefined-builtin, invalid-name
