@@ -71,15 +71,24 @@ class socket:
         host, port = address
         if conntype is None:
             conntype = _socket_provider.TCP_MODE
+<<<<<<< HEAD
         if not _socket_provider.socket_connect(
             self._socknum, host, port, conn_mode=conntype
         ):
+=======
+        if not _socket_provider.socket_connect(self._socknum, host, port, conn_mode=conntype,
+                                               timeout=self._timeout):
+>>>>>>> 96a541c... Plumb timeout through everything.
             raise RuntimeError("Failed to connect to host", host)
         self._buffer = b""
 
+<<<<<<< HEAD
     def send(self, data):  # pylint: disable=no-self-use
+=======
+    def send(self, data):
+>>>>>>> 96a541c... Plumb timeout through everything.
         """Send some data to the socket"""
-        _socket_provider.socket_write(self._socknum, data)
+        _socket_provider.socket_write(self._socknum, data, timeout=self._timeout)
         gc.collect()
 
     def write(self, data):
@@ -97,11 +106,10 @@ class socket:
             avail = self.available()
             if avail:
                 # TODO: Remove this because it causes a longer byte string allocation.
-                self._buffer += _socket_provider.socket_read(self._socknum, avail)
-            # elif self._timeout > 0 and time.monotonic() - stamp > self._timeout:
-            #     print("timed out", self._timeout, self._buffer)
-            #     self.close()  # Make sure to close socket so that we don't exhaust sockets.
-            #     raise RuntimeError("Didn't receive full response, failing out")
+                self._buffer += _socket_provider.socket_read(self._socknum, avail,
+                                                             timeout=self._timeout)
+            elif self._timeout > 0 and time.monotonic() - stamp > self._timeout:
+                return None
 
         duration = time.monotonic() - stamp
         if duration > 0.1:
@@ -120,7 +128,8 @@ class socket:
                 avail = self.available()
                 if avail:
                     # TODO: Remove this because it causes a longer byte string allocation.
-                    self._buffer += _socket_provider.socket_read(self._socknum, avail)
+                    self._buffer += _socket_provider.socket_read(self._socknum, avail,
+                                                                 timeout=self._timeout)
                 else:
                     break
             gc.collect()
@@ -137,7 +146,8 @@ class socket:
             avail = self.available()
             if avail:
                 stamp = time.monotonic()
-                recv = _socket_provider.socket_read(self._socknum, min(to_read, avail))
+                recv = _socket_provider.socket_read(self._socknum, min(to_read, avail),
+                                                    timeout=self._timeout)
                 received.append(recv)
                 to_read -= len(recv)
                 gc.collect()
@@ -170,7 +180,7 @@ class socket:
     def available(self):
         """Returns how many bytes of data are available to be read (up to the MAX_PACKET length)"""
         if self.socknum != NO_SOCKET_AVAIL:
-            return min(_socket_provider.socket_available(self._socknum), MAX_PACKET)
+            return min(_socket_provider.socket_available(self._socknum, timeout=self._timeout), MAX_PACKET)
         return 0
 
     def connected(self):
@@ -179,7 +189,7 @@ class socket:
             return False
         if self.available():
             return True
-        status = _socket_provider.socket_status(self.socknum)
+        status = _socket_provider.socket_status(self.socknum, timeout=self._timeout)
         result = status not in (
             adafruit_esp32spi.SOCKET_LISTEN,
             adafruit_esp32spi.SOCKET_CLOSED,
@@ -202,5 +212,5 @@ class socket:
 
     def close(self):
         """Close the socket, after reading whatever remains"""
-        _socket_provider.socket_close(self._socknum)
+        _socket_provider.socket_close(self._socknum, timeout=self._timeout)
 # pylint: enable=unused-argument, redefined-builtin, invalid-name

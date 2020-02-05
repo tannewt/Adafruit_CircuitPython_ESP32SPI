@@ -115,7 +115,7 @@ class ESPSPI_WiFiManager:
                     print("Connecting to AP...")
                 self.pixel_status((100, 0, 0))
                 self.esp.connect_AP(
-                    bytes(self.ssid, "utf-8"), bytes(self.password, "utf-8")
+                    bytes(self.ssid, "utf-8"), bytes(self.password, "utf-8"), timeout=10
                 )
                 failure_count = 0
                 self.pixel_status((0, 100, 0))
