@@ -185,13 +185,13 @@ class ESP_SPIcontrol:  # pylint: disable=too-many-public-methods, too-many-insta
         if self._gpio0:
             self._gpio0.direction = Direction.INPUT
 
-    def _wait_for_ready(self, *, timeout=0):
+    def _wait_for_ready(self, *, timeout=0, invert=False):
         """Wait until the ready pin goes low"""
         if self._debug >= 3:
             print("Wait for ESP32 ready", end='')
         start_time = time.monotonic()
         while timeout == 0 or (time.monotonic() - start_time) < timeout:
-            if not self._ready.value: # we're ready!
+            if self._ready.value == invert: # we're ready!
                 return True
             if self._debug >= 3:
                 print('.', end='')
@@ -239,7 +239,8 @@ class ESP_SPIcontrol:  # pylint: disable=too-many-public-methods, too-many-insta
 
         self._wait_for_ready(timeout=timeout)
         with self._spi_device as spi:
-            if not self._wait_for_ready(timeout=timeout):
+            # Wait until not ready.
+            if not self._wait_for_ready(timeout=timeout, invert=True):
                 raise RuntimeError("ESP32 timed out on SPI select")
             spi.write(self._sendbuf, start=0, end=packet_len)  # pylint: disable=no-member
             if self._debug >= 3:
@@ -285,7 +286,8 @@ class ESP_SPIcontrol:  # pylint: disable=too-many-public-methods, too-many-insta
 
         responses = []
         with self._spi_device as spi:
-            if not self._wait_for_ready(timeout):
+            # Wait until not ready.
+            if not self._wait_for_ready(timeout=timeout, invert=True):
                 raise RuntimeError("ESP32 timed out on SPI select")
 
             self._wait_spi_char(spi, _START_CMD)
