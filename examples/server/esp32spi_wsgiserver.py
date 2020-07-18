@@ -46,7 +46,6 @@ esp = adafruit_esp32spi.ESP_SPIcontrol(
 )  # pylint: disable=line-too-long
 
 print("MAC addr:", [hex(i) for i in esp.MAC_address])
-print("MAC addr actual:", [hex(i) for i in esp.MAC_address_actual])
 
 # Use below for Most Boards
 status_light = neopixel.NeoPixel(

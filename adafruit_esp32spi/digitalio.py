@@ -14,97 +14,14 @@ https://github.com/adafruit/Adafruit_Blinka/blob/master/src/digitalio.py
 """
 from micropython import const
 
+from digitalio import Direction
 
-class Pin:
-    """
-    Implementation of CircuitPython API Pin Handling
-    for ESP32SPI.
+_SET_PIN_MODE_CMD = const(0x50)
+_SET_DIGITAL_WRITE_CMD = const(0x51)
+_SET_DIGITAL_READ_CMD = const(0x53)
 
-    :param int esp_pin: Valid ESP32 GPIO Pin, predefined in ESP32_GPIO_PINS.
-    :param ESP_SPIcontrol esp: The ESP object we are using.
-
-    NOTE: This class does not currently implement reading digital pins
-    or the use of internal pull-up resistors.
-    """
-
-    # pylint: disable=invalid-name
-    IN = const(0x00)
-    OUT = const(0x01)
-    LOW = const(0x00)
-    HIGH = const(0x01)
-    _value = LOW
-    _mode = IN
-    pin_id = None
-
-    ESP32_GPIO_PINS = set(
-        [0, 1, 2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33]
-    )
-
-    def __init__(self, esp_pin, esp):
-        if esp_pin in self.ESP32_GPIO_PINS:
-            self.pin_id = esp_pin
-        else:
-            raise AttributeError("Pin %d is not a valid ESP32 GPIO Pin." % esp_pin)
-        self._esp = esp
-
-    def init(self, mode=IN):
-        """Initalizes a pre-defined pin.
-        :param mode: Pin mode (IN, OUT, LOW, HIGH). Defaults to IN.
-        """
-        if mode is not None:
-            if mode == self.IN:
-                self._mode = self.IN
-                self._esp.set_pin_mode(self.pin_id, 0)
-            elif mode == self.OUT:
-                self._mode = self.OUT
-                self._esp.set_pin_mode(self.pin_id, 1)
-            else:
-                raise RuntimeError("Invalid mode defined")
-
-    def value(self, val=None):
-        """Sets ESP32 Pin GPIO output mode.
-        :param val: Pin output level (LOW, HIGH)
-        """
-        if val is not None:
-            if val == self.LOW:
-                self._value = val
-                self._esp.set_digital_write(self.pin_id, 0)
-            elif val == self.HIGH:
-                self._value = val
-                self._esp.set_digital_write(self.pin_id, 1)
-            else:
-                raise RuntimeError("Invalid value for pin")
-        else:
-            raise NotImplementedError(
-                "digitalRead not currently implemented in esp32spi"
-            )
-
-    def __repr__(self):
-        return str(self.pin_id)
-
-
-# pylint: disable = too-few-public-methods
-class DriveMode:
-    """DriveMode Enum."""
-
-    PUSH_PULL = None
-    OPEN_DRAIN = None
-
-
-DriveMode.PUSH_PULL = DriveMode()
-DriveMode.OPEN_DRAIN = DriveMode()
-
-
-class Direction:
-    """DriveMode Enum."""
-
-    INPUT = None
-    OUTPUT = None
-
-
-Direction.INPUT = Direction()
-Direction.OUTPUT = Direction()
-
+_PIN_MODE_IN = const(0x00)
+_PIN_MODE_OUT = const(0x01)
 
 class DigitalInOut:
     """Implementation of DigitalIO module for ESP32SPI.
@@ -117,7 +34,7 @@ class DigitalInOut:
     # pylint: disable = attribute-defined-outside-init
     def __init__(self, esp, pin):
         self._esp = esp
-        self._pin = Pin(pin, self._esp)
+        self._pin = pin
         self.direction = Direction.INPUT
 
     def __enter__(self):
@@ -136,41 +53,54 @@ class DigitalInOut:
         :param DriveMode drive_mode: Drive mode for the output.
         """
         self._direction = Direction.OUTPUT
-        self._drive_mode = drive_mode
+        self.drive_mode = drive_mode
         self.value = value
+        resp = self.esp.send_command_get_response(_SET_PIN_MODE_CMD, ((pin,), (_PIN_MODE_OUT,)))
+        if resp[0][0] != 1:
+            raise RuntimeError("Failed to set pin mode")
 
     def switch_to_input(self, pull=None):
         """Sets the pull and then switch to read in digital values.
         :param Pull pull: Pull configuration for the input.
         """
-        raise NotImplementedError(
-            "Digital reads are not currently supported in ESP32SPI."
-        )
+        self._direction = Direction.INPUT
+        resp = self.esp.send_command_get_response(_SET_PIN_MODE_CMD, ((pin,), (_PIN_MODE_IN,)))
+        if resp[0][0] != 1:
+            raise RuntimeError("Failed to set pin mode")
 
     @property
     def direction(self):
         """Returns the pin's direction."""
-        return self.__direction
+        return self._direction
 
     @direction.setter
-    def direction(self, pin_dir):
+    def direction(self, direction):
         """Sets the direction of the pin.
-        :param Direction dir: Pin direction (Direction.OUTPUT or Direction.INPUT)
+        :param digitalio.Direction direction: Pin direction
         """
-        self.__direction = pin_dir
         if pin_dir is Direction.OUTPUT:
-            self._pin.init(mode=Pin.OUT)
-            self.value = False
-            self.drive_mode = DriveMode.PUSH_PULL
+            self.switch_to_output()
         elif pin_dir is Direction.INPUT:
-            self._pin.init(mode=Pin.IN)
+            self.switch_to_input()
         else:
             raise AttributeError("Not a Direction")
 
     @property
     def value(self):
-        """Returns the digital logic level value of the pin."""
-        return self._pin.value() == 1
+        """The digital logic level value of the pin."""
+
+        # Verify nina-fw => 1.5.0
+        fw_semver_maj = bytes(self._esp.firmware_version).decode("utf-8")[2]
+        assert int(fw_semver_maj) >= 5, "Please update nina-fw to 1.5.0 or above."
+
+        resp = self._esp.send_command_get_response(_SET_DIGITAL_READ_CMD, ((pin,),))[0]
+        if resp[0] == 0:
+            return False
+        if resp[0] == 1:
+            return True
+        raise ValueError(
+            "_SET_DIGITAL_READ response error: response is not boolean", resp[0]
+        )
 
     @value.setter
     def value(self, val):
@@ -180,9 +110,13 @@ class DigitalInOut:
         :param bool value: Pin logic level. True is logic high, False is logic low.
         """
         if self.direction is Direction.OUTPUT:
-            self._pin.value(1 if val else 0)
-        else:
             raise AttributeError("Not an output")
+        self._value = val
+        resp = self._esp.send_command_get_response(
+            _SET_DIGITAL_WRITE_CMD, ((self.pin_id,), (1 if val else 0,))
+        )
+        if resp[0][0] != 1:
+            raise RuntimeError("Failed to write to pin")
 
     @property
     def drive_mode(self):
@@ -197,7 +131,7 @@ class DigitalInOut:
         :param DriveMode mode: Defines the drive mode when outputting digital values.
         Either PUSH_PULL or OPEN_DRAIN
         """
-        self.__drive_mode = mode
+        self._drive_mode = mode
         if mode is DriveMode.OPEN_DRAIN:
             raise NotImplementedError(
                 "Drive mode %s not implemented in ESP32SPI." % mode
